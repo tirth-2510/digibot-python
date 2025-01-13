@@ -33,7 +33,7 @@ def chatbot(document_id: str, user_input: str):
     )
     docs = vector_store.similarity_search(query=user_input, k=1)
     context = docs[0].page_content
-    if docs is not None:
+    if docs:
         message.append({"role": "system", "content": context})
         client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         completion = client.chat.completions.create(
