@@ -1,0 +1,5 @@
+fastapi
+groq
+langchain-milvus
+langchain-google-genai
+python-dotenv
