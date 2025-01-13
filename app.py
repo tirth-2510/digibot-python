@@ -19,6 +19,7 @@ app.add_middleware(
 
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"))
 
+vector_store = None
 memory_store = []
 
 def chatbot(document_id: str, user_input: str):
