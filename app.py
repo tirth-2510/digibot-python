@@ -159,7 +159,7 @@ async def delete_file(data: dict = Body(...)):
             {"_id": ObjectId(document_id)},
             {"$pull": {f"file_ids":None }},
         )
-        client = MilvusClient(uri=URI, token=TOKEN)
+        client = MilvusClient(uri: os.getenv("ZILLIZ_URI_ENDPOINT"), token: os.getenv("ZILLIZ_TOKEN"))
         collection = client.get_collection_stats(f"id_{document_id}")
         if collection["row_count"] == 0:
             client.drop_collection(f"id_{document_id}")
