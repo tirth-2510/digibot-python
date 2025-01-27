@@ -8,3 +8,4 @@ langchain-google-genai
 langchain
 pymongo
 python-dotenv
+python-multipart
