@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Body
+from fastapi import Body, FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 from pymilvus import MilvusClient
@@ -26,7 +26,7 @@ app.add_middleware(
 
 mongo_uri = os.getenv("MONGODB_URI")
 client = MongoClient(mongo_uri)
-db = client["doc_bot"]
+db = client["digibot_test"]
 ud_db = db["user_details"]
 
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"))
@@ -159,7 +159,7 @@ async def delete_file(data: dict = Body(...)):
             {"_id": ObjectId(document_id)},
             {"$pull": {f"file_ids":None }},
         )
-        client = MilvusClient(uri: os.getenv("ZILLIZ_URI_ENDPOINT"), token: os.getenv("ZILLIZ_TOKEN"))
+        client = MilvusClient(uri=os.getenv("ZILLIZ_URI_ENDPOINT"), token=os.getenv("ZILLIZ_TOKEN"))
         collection = client.get_collection_stats(f"id_{document_id}")
         if collection["row_count"] == 0:
             client.drop_collection(f"id_{document_id}")
