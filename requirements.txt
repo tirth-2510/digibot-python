@@ -1,6 +1,7 @@
 fastapi
 pymilvus
 groq
+uvicorn
 langchain-milvus
 PyPDF2
 langchain-google-genai
