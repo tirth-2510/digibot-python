@@ -1,6 +1,9 @@
 fastapi
+pymilvus
 groq
 langchain-milvus
+PyPDF2
 langchain-google-genai
+langchain
+pymongo
 python-dotenv
-uvicorn
