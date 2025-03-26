@@ -3,7 +3,7 @@ pymilvus
 groq
 uvicorn
 langchain-milvus
-PyPDF2
+pdfplumber
 langchain-google-genai
 langchain
 pymongo
