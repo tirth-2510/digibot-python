@@ -6,6 +6,7 @@ langchain-milvus
 pdfplumber
 langchain-google-genai
 langchain
+langchain-community
 pymongo
 python-dotenv
 python-multipart
