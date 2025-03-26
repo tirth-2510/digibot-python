@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app= FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,11 +35,11 @@ embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_a
 vector_store = None
 memory_store = []
 
-def extract_pdf_text(pdf) -> str:
+def extract_pdf_text(file) -> str:
     text = ""
-    pdf_reader = PyPDF2.PdfReader(pdf)
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ""
+    pdf_reader = PDFPlumberLoader(file_path=file).load()
+    for page in pdf_reader:
+        text += page.page_content or ""
     return text
 
 def get_text_chunks(text: str):
@@ -61,6 +62,7 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
             connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token":os.getenv("ZILLIZ_TOKEN")},
             collection_name=collection_name,
             ids=file_id,
+            index_params={"index_type": "HNSW", "metric_type": "COSINE"},
             drop_old=False,
         )
         return({"message": "Vector store created successfully."})
