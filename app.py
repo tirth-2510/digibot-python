@@ -5,7 +5,7 @@ from groq import Groq
 from pymilvus import MilvusClient
 from groq import Groq
 from langchain_milvus import Zilliz
-import PyPDF2
+from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pymongo import MongoClient
