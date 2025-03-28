@@ -31,7 +31,7 @@ client = MongoClient(mongo_uri)
 db = client["digibot"]
 ud_db = db["user_details"]
 
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"))
+embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=os.getenv("GOOGLE_API_KEY"))
 
 vector_store = None
 memory_store = []
