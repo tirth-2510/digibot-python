@@ -67,27 +67,55 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
         )
         return({"message": "Vector store created successfully."})
 
-def chatbot(document_id: str, user_input: str):
-    message = [{"role":"user", "content":"""
-    You are a highly professional customer support assistant named DIGIBOT. Respond as if you are the company representative, helping with questions and apologize if user directly asks about your knowledge base or if you are unable to assist, with the sentence: 'I am not able to understand your query , could you try to rephrase your queries?' """},
-    {"role":"assistant", "content":"Ok I will answer from the context only without mentioning about the context or the document, I will simply respond with 'I am not able to understand your query , could you try to rephrase your query?'. I will answer on behalf of the company and won't answer for anything else."},{"role":"user","content":user_input}]
-
+def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     vector_store = Zilliz(
         collection_name=f"id_{document_id}",
         connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
+        index_params={"index_type": "IVF_PQ", "metric_type": "COSINE"},
         embedding_function=embeddings
     )
-    docs = vector_store.similarity_search(query=user_input, k=1)
-    context = docs[0].page_content
-    if docs is not None:
-        message.append({"role": "system", "content": context})
-        client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        completion = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=message,
-            n=1
-        )
-        return(completion.choices[0].message.content)
+    retrieved_docs = vector_store.similarity_search_with_relevance_scores(query=user_input, k=1, score_threshold=0.78)
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    if retrieved_docs == []:
+        message = [
+            {"role": "system", "content": f"""
+               You are {bot_name}, a Professional AI assistant. You should respond as a prosessional company representative. The below question/message is not relevant to our company.
+                - **Inform the user in a friendly,polite and professional manner that their question/message is unrelated to our Company.** and DO NOT ANSWER THE QUESTION/MESSAGE.
+                - Keep it **brief and natural (1 line only).** thats it nothing else.
+                - Again saying do not answer this question.
+            """},
+            {"role": "user", "content": user_input}
+        ]
+    else:
+        context = retrieved_docs[0][0].page_content
+        highest_score = retrieved_docs[0][1]
+        message = [
+            {"role": "system", "content": f"""
+            You are {bot_name}, a professional AI assistant for our company.
+            
+            **Response Guidelines:**
+            - Maintain professionalism while keeping responses brief, direct, clear, and helpful.
+            - If the user expresses frustration with valid concerns, acknowledge their feelings and provide a constructive answer.
+            - If the retrieved context **is irrelevant**, do NOT answer the question from your knowledge base just refrain from answering.
+            - If the user is being offensive, politely request respectful communication while staying helpful.
+            """},
+            {"role": "user", "content": user_input},
+            {"role": "system", "content": context}
+        ]
+    
+    response = client.chat.completions.create(
+        max_completion_tokens=256,  
+        model="llama3-8b-8192",
+        messages=message,
+        temperature=0.3,
+        stream=True
+    )
+
+    for chunk in response:
+        if chunk.choices:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
 
 @app.get("/")
 async def root():
@@ -97,10 +125,10 @@ async def root():
 async def chat(data: dict = Body(...)):
     user_input = data.get("user_input")
     document_id = data.get("document_id")
-    if user_input.lower() in ["exit", "quit", "finish"]:
-        return {"Goodbye!"}
-    return{"response": chatbot(document_id, user_input)}
+    bot_name = data.get("name")
 
+    return StreamingResponse(generate_chat_response(document_id, bot_name, user_input), media_type="text/plain")
+    
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...), document_id: str = Form(...)):
     try:
