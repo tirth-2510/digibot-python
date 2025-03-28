@@ -63,7 +63,7 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
             connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token":os.getenv("ZILLIZ_TOKEN")},
             collection_name=collection_name,
             ids=file_id,
-            index_params={"index_type": "HNSW", "metric_type": "COSINE"},
+            index_params={"index_type": "IVF_PQ", "metric_type": "COSINE"},
             drop_old=False,
         )
         return({"message": "Vector store created successfully."})
