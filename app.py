@@ -69,14 +69,19 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
         return({"message": "Vector store created successfully."})
 
 def generate_chat_response(document_id: str, bot_name: str, user_input: str):
+    # Search for relevant document context
     vector_store = Zilliz(
         collection_name=f"id_{document_id}",
         connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
         index_params={"index_type": "IVF_PQ", "metric_type": "COSINE"},
         embedding_function=embeddings
     )
-    retrieved_docs = vector_store.similarity_search_with_relevance_scores(query=user_input, k=1, score_threshold=0.78)
+    
+    # Retrieve top documents with a relevance score threshold
+    retrieved_docs = vector_store.similarity_search_with_relevance_scores(query=user_input, k=1, score_threshold=0.75)
+    
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
     if retrieved_docs == []:
         message = [
             {"role": "system", "content": f"""
@@ -90,15 +95,20 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     else:
         context = retrieved_docs[0][0].page_content
         highest_score = retrieved_docs[0][1]
+        print(f"Highest relevance score: {highest_score}")
+
         message = [
             {"role": "system", "content": f"""
             You are {bot_name}, a professional AI assistant for our company.
+            Give responses as if you are a member of the company or a representative of the company.
             
             **Response Guidelines:**
-            - Maintain professionalism while keeping responses brief, direct, clear, and helpful.
-            - If the user expresses frustration with valid concerns, acknowledge their feelings and provide a constructive answer.
-            - If the retrieved context **is irrelevant**, do NOT answer the question from your knowledge base just refrain from answering.
+            - Responses should not exceed 225 words, with proper format.
+            - Only answer if relevant context from the document exists.
+            - If no relevant context is found, politely steer the conversation back to document-related topics.
+            - Do not provide general knowledge or answer off-topic questions.- If the retrieved context **is irrelevant**, do NOT answer the question from your knowledge base just refrain from answering.
             - If the user is being offensive, politely request respectful communication while staying helpful.
+            - **Maintain all Markdown syntax exactly as provided, including links, bold text, and formatting. Do not alter or reformat them.**
             """},
             {"role": "user", "content": user_input},
             {"role": "system", "content": context}
@@ -108,7 +118,7 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
         max_completion_tokens=256,  
         model="llama3-8b-8192",
         messages=message,
-        temperature=0.3,
+        temperature=0.5,
         stream=True
     )
 
