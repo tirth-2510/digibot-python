@@ -95,8 +95,7 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     else:
         context = retrieved_docs[0][0].page_content
         highest_score = retrieved_docs[0][1]
-        print(f"Highest relevance score: {highest_score}")
-
+        
         message = [
             {"role": "system", "content": f"""
             You are {bot_name}, a professional AI assistant for our company.
