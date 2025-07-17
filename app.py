@@ -1,17 +1,17 @@
 import os
+import io
 from fastapi import Body, FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from groq import Groq
 from pymilvus import MilvusClient
-from groq import Groq
 from langchain_milvus import Zilliz
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-import io
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,10 +31,9 @@ client = MongoClient(mongo_uri)
 db = client["digibot"]
 ud_db = db["user_details"]
 
-embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=os.getenv("GOOGLE_API_KEY"))
+llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), temperature=0, model="llama-3.3-70b-versatile")
 
-vector_store = None
-memory_store = []
+embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=os.getenv("GOOGLE_API_KEY"))
 
 def extract_pdf_text(file) -> str:
     text = ""
@@ -56,8 +55,7 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
         raise HTTPException(status_code=400, detail="Document ID is required")
     else:
         collection_name = f"id_{document_id}"
-        global vector_store
-        vector_store = Zilliz.from_texts(
+        Zilliz.from_texts(
             texts=chunks,
             embedding=embeddings,
             connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token":os.getenv("ZILLIZ_TOKEN")},
@@ -68,7 +66,7 @@ def create_vector_store(chunks: list[str], document_id: str, file_id: list[str])
         )
         return({"message": "Vector store created successfully."})
 
-def generate_chat_response(document_id: str, bot_name: str, user_input: str):
+async def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     # Search for relevant document context
     vector_store = Zilliz(
         collection_name=f"id_{document_id}",
@@ -80,8 +78,6 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     # Retrieve top documents with a relevance score threshold
     retrieved_docs = vector_store.similarity_search_with_relevance_scores(query=user_input, k=1, score_threshold=0.75)
     
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
     if retrieved_docs == []:
         message = [
             {"role": "system", "content": f"""
@@ -94,10 +90,9 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
         ]
     else:
         context = retrieved_docs[0][0].page_content
-        highest_score = retrieved_docs[0][1]
         
         message = [
-            {"role": "system", "content": f"""
+            HumanMessage(content=f"""
             You are {bot_name}, a professional AI assistant for our company.
             Give responses as if you are a member of the company or a representative of the company.
             
@@ -108,24 +103,15 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
             - Do not provide general knowledge or answer off-topic questions.- If the retrieved context **is irrelevant**, do NOT answer the question from your knowledge base just refrain from answering.
             - If the user is being offensive, politely request respectful communication while staying helpful.
             - **Maintain all Markdown syntax exactly as provided, including links, bold text, and formatting. Do not alter or reformat them.**
-            """},
-            {"role": "user", "content": user_input},
-            {"role": "system", "content": context}
+            
+            Context: {context}
+            """),
+            HumanMessage(content=user_input),
         ]
     
-    response = client.chat.completions.create(
-        max_completion_tokens=256,  
-        model="llama3-8b-8192",
-        messages=message,
-        temperature=0.5,
-        stream=True
-    )
-
-    for chunk in response:
-        if chunk.choices:
-            content = chunk.choices[0].delta.content
-            if content:
-                yield content
+    response = llm.stream(message)
+    for chunks in response:
+        yield chunks.content
 
 @app.get("/")
 async def root():
@@ -133,9 +119,9 @@ async def root():
 
 @app.post("/chat")
 async def chat(data: dict = Body(...)):
-    user_input = data.get("user_input")
     document_id = data.get("document_id")
     bot_name = data.get("name")
+    user_input = data.get("user_input")
 
     return StreamingResponse(generate_chat_response(document_id, bot_name, user_input), media_type="text/plain")
     
@@ -207,3 +193,7 @@ async def delete_file(data: dict = Body(...)):
         return {"message": "File deleted successfully."} 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="localhost", port=8000, reload=True)
