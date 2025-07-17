@@ -37,15 +37,12 @@ async def generate_chat_response(document_id: str, bot_name: str, user_input: st
     retrieved_docs = vector_store.similarity_search_with_relevance_scores(query=user_input, k=1, score_threshold=0.75)
     
     if retrieved_docs == []:
-        message = [
-            {"role": "system", "content": f"""
+        message = [HumanMessage(content=f"""
                You are {bot_name}, a Professional AI assistant. You should respond as a prosessional company representative. The below question/message is not relevant to our company.
                 - **Inform the user in a friendly,polite and professional manner that their question/message is unrelated to our Company.** and DO NOT ANSWER THE QUESTION/MESSAGE.
                 - Keep it **brief and natural (1 line only).** thats it nothing else.
                 - Again saying do not answer this question.
-            """},
-            {"role": "user", "content": user_input}
-        ]
+            """),HumanMessage(content=user_input)]
     else:
         context = retrieved_docs[0][0].page_content
         
