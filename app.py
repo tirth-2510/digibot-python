@@ -6,7 +6,6 @@ from langchain_milvus import Zilliz
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from pymilvus import MilvusClient
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,17 +33,11 @@ embeddings = GoogleGenerativeAIEmbeddings(
     google_api_key=os.getenv("GOOGLE_API_KEY")
 )
 
-# Singleton Milvus client
-milvus_client = MilvusClient(
-    uri=os.getenv("ZILLIZ_URI_ENDPOINT"),
-    token=os.getenv("ZILLIZ_TOKEN")
-)
-
 # Reusable vector store generator
 def get_vector_store(document_id: str):
     return Zilliz(
         collection_name=f"id_{document_id}",
-        client=milvus_client,
+        connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
         index_params={"index_type": "IVF_PQ", "metric_type": "COSINE"},
         embedding_function=embeddings
     )
