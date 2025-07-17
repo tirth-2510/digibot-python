@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-langchain
 langchain-milvus
 langchain-groq
 langchain-google-genai
