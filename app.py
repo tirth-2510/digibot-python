@@ -2,10 +2,16 @@ import os
 from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from langchain_milvus import Zilliz
+
+from langchain_milvus import Milvus
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+
+from tools import followup_handler
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +31,8 @@ app.add_middleware(
 llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
     temperature=0,
-    model="llama-3.3-70b-versatile"
+    model="llama-3.3-70b-versatile",
+    streaming=True
 )
 
 embeddings = GoogleGenerativeAIEmbeddings(
@@ -35,7 +42,7 @@ embeddings = GoogleGenerativeAIEmbeddings(
 
 # Reusable vector store generator
 def get_vector_store(document_id: str):
-    return Zilliz(
+    return Milvus(
         collection_name=f"id_{document_id}",
         connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
         index_params={"index_type": "IVF_PQ", "metric_type": "COSINE"},
@@ -43,7 +50,32 @@ def get_vector_store(document_id: str):
     )
 
 # Streaming response generator
-def generate_chat_response(document_id: str, bot_name: str, user_input: str):
+def generate_chat_response(document_id: str, bot_name: str, user_input: str, chat_history: list = []):
+    followup_tool=llm.bind_tools([followup_handler])
+    followup_promopt=f"""You are a Legal AI assistant.  
+You have access to 1 tool: `followup_handler`.  
+
+You MUST CALL `followup_handler` if:  
+1. The user's message is a follow-up to a previous conversation.  
+2. The user's message is unclear, ambiguous, or lacks sufficient context to provide a confident answer.  
+
+Examples:  
+- User: "did you do the comedy factory project"
+- Assistant: "Yes"
+- User: "What was the Techstack"
+- Tool → Restructured: "What was the Techstack of comedy factory project"  
+
+Query:  
+{user_input}
+"""
+    toolprompt={"role":"user","content":followup_promopt}
+    chat_history.append(toolprompt)
+    followupres=followup_tool.invoke(input=chat_history)
+    chat_history.pop()
+    if (followupres.tool_calls):
+        user_input=followupres.tool_calls[0]['args']['query']
+        print(f"Restructured Query: {user_input}")
+
     vector_store = get_vector_store(document_id)
     retrieved_docs = vector_store.similarity_search(
         query=user_input, k=3
@@ -52,10 +84,9 @@ def generate_chat_response(document_id: str, bot_name: str, user_input: str):
     context_blocks = [doc.page_content for doc in retrieved_docs]
     context = "\n\n".join(context_blocks)
 
-    message = [
-        HumanMessage(content=f"""
+    message = f"""
 You are {bot_name}, a professional AI assistant representing our company.
-Y
+
 Your role is to assist users by answering questions using only the information provided in the context below. If a question cannot be answered based on this context, respond clearly and professionally.
 
 **Instructions for Response Behavior:**
@@ -88,15 +119,17 @@ Context:
 
 Question:
 {user_input}
-""")]
+"""
 
-    response = llm.stream(message)
+    chat_history.append({"role":"user","content":message})
+
+    response = llm.stream(chat_history)
     async def stream_response():
         for chunk in response:
             yield chunk.content
 
     return StreamingResponse(stream_response(), media_type="text/plain")
-    
+
 @app.get("/")
 async def root():
     return JSONResponse(content="Connection Successful")
@@ -106,5 +139,25 @@ async def chat(data: dict = Body(...)):
     document_id = data.get("document_id")
     bot_name = data.get("name")
     user_input = data.get("user_input")
+    chat_history = data.get("history", [])
 
-    return generate_chat_response(document_id, bot_name, user_input)
+    return generate_chat_response(document_id=document_id, bot_name=bot_name, user_input=user_input, chat_history=chat_history)
+
+@app.post("/configuration")
+async def config(request:dict = Body(...) ):
+    id = request.get("id", None)
+    try:
+        client = MongoClient(os.getenv("MONGO_URI"))
+        db=client[os.getenv("MONGO_DATABASE")]
+        user_config= db[os.getenv("MONGO_COLLECTION")]
+    except Exception as e:
+        return JSONResponse(content={"error": e},status_code=500)
+    if id:
+        userData = user_config.find_one({
+                "_id": ObjectId(id),
+        })
+        if userData:
+            userData.pop("_id")
+            return JSONResponse(content={"data": userData}, status_code=200)
+
+    return  JSONResponse(content={"error":"Data not found"}, status_code=400)
