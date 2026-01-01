@@ -5,3 +5,4 @@ langchain-groq
 langchain-google-genai
 langchain-core
 python-dotenv
+pymongo
