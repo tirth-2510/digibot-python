@@ -1,22 +1,29 @@
-import os
-from fastapi import Body, FastAPI
+import os, PyPDF2, io
+from fastapi import Body, FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from pymilvus import MilvusClient
 
 from langchain_milvus import Milvus
 from langchain_groq import ChatGroq
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
 from tools import followup_handler
 
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI()
+
+class DeleteRequest(BaseModel):
+    document_id: str
+    file_name: str
 
 # CORS middleware setup
 app.add_middleware(
@@ -31,14 +38,40 @@ app.add_middleware(
 llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
     temperature=0,
-    model="llama-3.3-70b-versatile",
+    model="meta-llama/llama-4-scout-17b-16e-instruct",
     streaming=True
 )
 
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
+    model="models/gemini-embedding-001",
     google_api_key=os.getenv("GOOGLE_API_KEY")
 )
+
+# <---------- PDF Reading and Embedding Functions ---------->
+def extract_pdf_text(pdf) -> str:
+    text = ""
+    pdf_reader = PyPDF2.PdfReader(pdf)
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
+    return text
+
+def get_text_chunks(text: str):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200) #Creating a splitter instance
+    return splitter.split_text(text)
+
+def generate_file_ids(chunks: list[str], file_name: str):
+    return [f"{file_name}_{i}" for i in range(len(chunks))]
+
+def create_vector_store(chunks: list[str], document_id: str, file_ids: list[str]):
+    Milvus.from_texts(
+        texts=chunks,
+        embedding=embeddings,
+        connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
+        collection_name=f"id_{document_id}",
+        ids=file_ids,
+        drop_old=False,
+    )
+    return {"message": "Vector store created successfully."}
 
 # Reusable vector store generator
 def get_vector_store(document_id: str):
@@ -51,27 +84,32 @@ def get_vector_store(document_id: str):
 
 # Streaming response generator
 def generate_chat_response(document_id: str, bot_name: str, user_input: str, chat_history: list = []):
+
     followup_tool=llm.bind_tools([followup_handler])
-    followup_promopt=f"""You are a Legal AI assistant.  
-You have access to 1 tool: `followup_handler`.  
+    followup_promopt=f"""You are a Legal AI assistant.
+You have access to 1 tool: `followup_handler`.
 
-You MUST CALL `followup_handler` if:  
-1. The user's message is a follow-up to a previous conversation.  
-2. The user's message is unclear, ambiguous, or lacks sufficient context to provide a confident answer.  
+You MUST CALL `followup_handler` if:
+1. The user's message is a follow-up to a previous conversation.
+2. The user's message is unclear, ambiguous, or lacks sufficient context to provide a confident answer.
 
-Examples:  
+Examples:
 - User: "did you do the comedy factory project"
 - Assistant: "Yes"
 - User: "What was the Techstack"
-- Tool → Restructured: "What was the Techstack of comedy factory project"  
+- Tool → Restructured: "What was the Techstack of comedy factory project"
 
-Query:  
+Query:
 {user_input}
 """
+
     toolprompt={"role":"user","content":followup_promopt}
+
     chat_history.append(toolprompt)
     followupres=followup_tool.invoke(input=chat_history)
+
     chat_history.pop()
+
     if (followupres.tool_calls):
         user_input=followupres.tool_calls[0]['args']['query']
         print(f"Restructured Query: {user_input}")
@@ -80,9 +118,11 @@ Query:
     retrieved_docs = vector_store.similarity_search(
         query=user_input, k=3
     )
-    
+
     context_blocks = [doc.page_content for doc in retrieved_docs]
     context = "\n\n".join(context_blocks)
+
+    print(context)
 
     message = f"""
 You are {bot_name}, a professional AI assistant representing our company.
@@ -143,6 +183,112 @@ async def chat(data: dict = Body(...)):
 
     return generate_chat_response(document_id=document_id, bot_name=bot_name, user_input=user_input, chat_history=chat_history)
 
+@app.post("/upload")
+async def upload_pdf(
+    file: UploadFile = File(...),
+    document_id: str = Form(...)
+):
+    try:
+        mdb_client = MongoClient(os.getenv("MONGO_URI"))
+        ud_db = mdb_client["digibot"]["user_details"]
+
+        user_data = ud_db.find_one({"_id": ObjectId(document_id)})
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        file_name = file.filename
+
+        if file_name not in user_data.get("user_files", []):
+            updated_data = ud_db.find_one_and_update(
+                {"_id": ObjectId(document_id)},
+                {"$addToSet": {"user_files": file_name}},
+            )
+
+            if updated_data:
+                content = await file.read()
+
+                pdf_text = extract_pdf_text(io.BytesIO(content))
+                text_chunks = get_text_chunks(pdf_text)
+
+                ud_db.find_one_and_update(
+                    {"_id": ObjectId(document_id)},
+                    {"$push": {"file_ids": len(text_chunks)}},
+                )
+
+                file_ids = generate_file_ids(text_chunks, file_name)
+
+                create_vector_store(text_chunks, document_id, file_ids)
+
+        mdb_client.close()
+
+        return JSONResponse(content={"response": "operation completed."}, status_code=200)
+
+    except Exception as e:
+        print(f"[ERROR]: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing PDF: {str(e)}"
+        )
+
+@app.delete("/delete")
+async def delete_file(req: DeleteRequest):
+    try:
+        document_id = req.document_id
+        file_name = req.file_name
+
+        mdb_client = MongoClient(os.getenv("MONGO_URI"))
+        ud_db = mdb_client["digibot"]["user_details"]
+
+        result = ud_db.find_one({"_id": ObjectId(document_id)})
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        file_index = result["user_files"].index(file_name)
+        file_id = result["file_ids"][file_index]
+
+        unique_id = [f"{file_name}_{i}" for i in range(file_id)]
+
+        vector_store = Milvus(
+            collection_name=f"id_{document_id}",
+            connection_args={"uri": os.getenv("ZILLIZ_URI_ENDPOINT"), "token": os.getenv("ZILLIZ_TOKEN")},
+            embedding_function=embeddings,
+        )
+
+        vector_store.delete(unique_id)
+
+        ud_db.find_one_and_update(
+            {"_id": ObjectId(document_id)},
+            {"$pull": {"user_files": file_name}},
+        )
+
+        ud_db.find_one_and_update(
+            {"_id": ObjectId(document_id)},
+            {"$unset": {f"file_ids.{file_index}": 1}},
+        )
+
+        ud_db.find_one_and_update(
+            {"_id": ObjectId(document_id)},
+            {"$pull": {"file_ids": None}},
+        )
+
+        milv_client = MilvusClient(uri=os.getenv("ZILLIZ_URI_ENDPOINT"), token=os.getenv("ZILLIZ_TOKEN"))
+
+        collection = milv_client.get_collection_stats(f"id_{document_id}")
+
+        if collection["row_count"] == 0:
+            milv_client.drop_collection(f"id_{document_id}")
+
+        milv_client.close()
+        mdb_client.close()
+
+        return {"message": "File deleted successfully."}
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting file: {str(e)}"
+        )
+
 @app.post("/configuration")
 async def config(request:dict = Body(...) ):
     id = request.get("id", None)
@@ -154,10 +300,10 @@ async def config(request:dict = Body(...) ):
         return JSONResponse(content={"error": e},status_code=500)
     if id:
         userData = user_config.find_one({
-                "_id": ObjectId(id),
+            "_id": ObjectId(id),
         })
         if userData:
             userData.pop("_id")
-            return JSONResponse(content={"data": userData}, status_code=200)
+            return JSONResponse(content=userData, status_code=200)
 
-    return  JSONResponse(content={"error":"Data not found"}, status_code=400)
+    return JSONResponse(content={"error":"Data not found"}, status_code=400)
