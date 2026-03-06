@@ -4,7 +4,7 @@ langchain
 langchain-milvus
 langchain-groq
 langchain-google-genai
-langchain-text-splitter
+langchain-text-splitters
 langchain-core
 python-dotenv
 pymongo
